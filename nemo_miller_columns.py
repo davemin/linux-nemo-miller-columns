@@ -5,11 +5,15 @@ Inspired by macOS Finder
 """
 
 import sys
+import os
 import gi
 import subprocess
 import mimetypes
 import urllib.parse
+import threading
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Generator, Optional
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('GdkPixbuf', '2.0')
@@ -396,6 +400,254 @@ class PreviewPanel(Gtk.Box):
         self.preview_scroll.hide()
 
 
+@dataclass
+class SearchResult:
+    """Represents a search result"""
+    path: Path
+    name: str
+    is_dir: bool
+    match_type: str  # "name" or "content"
+
+
+class SearchEngine:
+    """Handles file searching with name and content matching"""
+
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit for content search
+
+    def __init__(self):
+        self.cancelled = False
+
+    def cancel(self):
+        """Cancels the current search"""
+        self.cancelled = True
+
+    def search(self, root_path: Path, query: str) -> Generator[SearchResult, None, None]:
+        """
+        Searches for files matching the query.
+        Yields SearchResult objects as they are found.
+        """
+        self.cancelled = False
+        query_lower = query.lower()
+
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            if self.cancelled:
+                return
+
+            # Skip hidden directories
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+
+            current_dir = Path(dirpath)
+
+            # Search in directory names
+            for dirname in dirnames:
+                if self.cancelled:
+                    return
+                if query_lower in dirname.lower():
+                    yield SearchResult(
+                        path=current_dir / dirname,
+                        name=dirname,
+                        is_dir=True,
+                        match_type="name"
+                    )
+
+            # Search in file names and contents
+            for filename in filenames:
+                if self.cancelled:
+                    return
+
+                # Skip hidden files
+                if filename.startswith('.'):
+                    continue
+
+                file_path = current_dir / filename
+
+                # Check if name matches
+                name_match = query_lower in filename.lower()
+                if name_match:
+                    yield SearchResult(
+                        path=file_path,
+                        name=filename,
+                        is_dir=False,
+                        match_type="name"
+                    )
+                    continue  # Don't search content if name already matches
+
+                # Search in file content
+                if self._search_in_content(file_path, query_lower):
+                    yield SearchResult(
+                        path=file_path,
+                        name=filename,
+                        is_dir=False,
+                        match_type="content"
+                    )
+
+    def _search_in_content(self, file_path: Path, query: str) -> bool:
+        """Searches for query in file content. Returns True if found."""
+        try:
+            # Check file size
+            if file_path.stat().st_size > self.MAX_FILE_SIZE:
+                return False
+
+            # Check if it's a text file
+            mime_type, _ = mimetypes.guess_type(str(file_path))
+            if not mime_type:
+                return False
+
+            # Only search text-like files
+            text_types = ('text/', 'application/json', 'application/xml',
+                         'application/javascript', 'application/x-python',
+                         'application/x-sh', 'application/x-perl')
+            if not any(mime_type.startswith(t) for t in text_types):
+                return False
+
+            # Read and search
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+                return query in content.lower()
+
+        except (PermissionError, OSError, UnicodeDecodeError):
+            return False
+
+
+class SearchResultsView(Gtk.Box):
+    """View for displaying search results"""
+
+    def __init__(self, on_result_activated):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.on_result_activated = on_result_activated
+        self.icon_theme = Gtk.IconTheme.get_default()
+
+        # Header with result count and close button
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header.set_margin_start(12)
+        header.set_margin_end(12)
+        header.set_margin_top(8)
+        header.set_margin_bottom(8)
+
+        self.status_label = Gtk.Label(label="Searching...")
+        self.status_label.set_xalign(0)
+        header.pack_start(self.status_label, True, True, 0)
+
+        # Spinner for loading
+        self.spinner = Gtk.Spinner()
+        header.pack_start(self.spinner, False, False, 0)
+
+        self.pack_start(header, False, False, 0)
+
+        # Scrolled window for results
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+
+        # ListBox for results
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.connect("row-activated", self._on_row_activated)
+        self.listbox.get_style_context().add_class("search-results")
+
+        scroll.add(self.listbox)
+        self.pack_start(scroll, True, True, 0)
+
+        self.result_count = 0
+
+    def clear(self):
+        """Clears all results"""
+        for child in self.listbox.get_children():
+            self.listbox.remove(child)
+        self.result_count = 0
+        self.status_label.set_text("Searching...")
+
+    def start_search(self):
+        """Called when search starts"""
+        self.clear()
+        self.spinner.start()
+
+    def stop_search(self):
+        """Called when search completes"""
+        self.spinner.stop()
+        if self.result_count == 0:
+            self.status_label.set_text("No results found")
+        else:
+            self.status_label.set_text(f"{self.result_count} results")
+
+    def add_result(self, result: SearchResult):
+        """Adds a search result to the list"""
+        self.result_count += 1
+
+        row = Gtk.ListBoxRow()
+        row.result = result
+
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        hbox.set_margin_start(12)
+        hbox.set_margin_end(12)
+        hbox.set_margin_top(6)
+        hbox.set_margin_bottom(6)
+
+        # Icon
+        if result.is_dir:
+            icon_name = "folder"
+        else:
+            mime_type, _ = mimetypes.guess_type(str(result.path))
+            if mime_type:
+                icon_name = mime_type.replace('/', '-')
+                if not self.icon_theme.has_icon(icon_name):
+                    icon_name = "text-x-generic"
+            else:
+                icon_name = "text-x-generic"
+
+        try:
+            icon = self.icon_theme.load_icon(icon_name, 24, Gtk.IconLookupFlags.FORCE_SIZE)
+            image = Gtk.Image.new_from_pixbuf(icon)
+        except Exception:
+            image = Gtk.Image.new_from_icon_name("text-x-generic", Gtk.IconSize.LARGE_TOOLBAR)
+        hbox.pack_start(image, False, False, 0)
+
+        # Text container
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+
+        # File name with match type indicator
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        name_label = Gtk.Label(label=result.name)
+        name_label.set_xalign(0)
+        name_label.set_ellipsize(Pango.EllipsizeMode.END)
+        name_box.pack_start(name_label, False, False, 0)
+
+        # Match type badge
+        if result.match_type == "content":
+            badge = Gtk.Label(label="content")
+            badge.get_style_context().add_class("dim-label")
+            badge.set_markup("<small><i>in content</i></small>")
+            name_box.pack_start(badge, False, False, 0)
+
+        text_box.pack_start(name_box, False, False, 0)
+
+        # Path
+        path_label = Gtk.Label(label=str(result.path.parent))
+        path_label.set_xalign(0)
+        path_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        path_label.get_style_context().add_class("dim-label")
+        text_box.pack_start(path_label, False, False, 0)
+
+        hbox.pack_start(text_box, True, True, 0)
+
+        # Arrow
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic", Gtk.IconSize.MENU)
+        arrow.set_opacity(0.5)
+        hbox.pack_end(arrow, False, False, 0)
+
+        row.add(hbox)
+        self.listbox.add(row)
+        row.show_all()
+
+        # Update status
+        self.status_label.set_text(f"{self.result_count} results...")
+
+    def _on_row_activated(self, listbox, row):
+        """Handles result activation"""
+        if row and hasattr(row, 'result'):
+            self.on_result_activated(row.result)
+
+
 class MillerColumnsContainer(Gtk.Box):
     """Container for Miller columns with resizing support"""
 
@@ -552,6 +804,12 @@ class MillerColumnsWindow(Gtk.ApplicationWindow):
         self.set_default_size(1200, 700)
         self.current_path = Path(start_path or Path.home())
 
+        # Search state
+        self.search_mode = False
+        self.search_engine = SearchEngine()
+        self.search_thread = None
+        self.search_timeout_id = None
+
         self._setup_css()
 
         # Main layout
@@ -565,16 +823,27 @@ class MillerColumnsWindow(Gtk.ApplicationWindow):
         self.main_paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         main_box.pack_start(self.main_paned, True, True, 0)
 
+        # Stack for switching between columns and search results
+        self.content_stack = Gtk.Stack()
+        self.content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.content_stack.set_transition_duration(150)
+
         # Columns container
         self.columns_container = MillerColumnsContainer(
             self._on_item_selected,
             self._on_item_activated
         )
-
-        # Frame for columns
         columns_frame = Gtk.Frame()
         columns_frame.add(self.columns_container)
-        self.main_paned.pack1(columns_frame, True, False)
+        self.content_stack.add_named(columns_frame, "columns")
+
+        # Search results view
+        self.search_results_view = SearchResultsView(self._on_search_result_activated)
+        search_frame = Gtk.Frame()
+        search_frame.add(self.search_results_view)
+        self.content_stack.add_named(search_frame, "search")
+
+        self.main_paned.pack1(self.content_stack, True, False)
 
         # Preview panel
         self.preview_panel = PreviewPanel()
@@ -637,6 +906,19 @@ class MillerColumnsWindow(Gtk.ApplicationWindow):
         .resize-handle:hover {
             background-color: @theme_selected_bg_color;
         }
+
+        .search-results {
+            background-color: @theme_base_color;
+        }
+
+        .search-results row {
+            padding: 4px;
+        }
+
+        .search-results row:selected {
+            background-color: @theme_selected_bg_color;
+            color: @theme_selected_fg_color;
+        }
         """
 
         style_provider = Gtk.CssProvider()
@@ -675,6 +957,14 @@ class MillerColumnsWindow(Gtk.ApplicationWindow):
         path_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
         path_scroll.add(self.path_bar)
         toolbar_box.pack_start(path_scroll, True, True, 0)
+
+        # Search entry
+        self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text("Search files and contents...")
+        self.search_entry.set_width_chars(25)
+        self.search_entry.connect("search-changed", self._on_search_changed)
+        self.search_entry.connect("stop-search", self._on_search_stopped)
+        toolbar_box.pack_start(self.search_entry, False, False, 0)
 
         # Open in Nemo button
         nemo_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic", Gtk.IconSize.BUTTON)
@@ -798,14 +1088,117 @@ class MillerColumnsWindow(Gtk.ApplicationWindow):
         except Exception as e:
             print(f"Error opening terminal: {e}")
 
+    def _on_search_changed(self, search_entry):
+        """Handles search text changes with debounce"""
+        # Cancel any pending search timeout
+        if self.search_timeout_id:
+            GLib.source_remove(self.search_timeout_id)
+            self.search_timeout_id = None
+
+        query = search_entry.get_text().strip()
+
+        if not query:
+            # Clear search and return to columns view
+            self._exit_search_mode()
+            return
+
+        # Debounce: wait 300ms before starting search
+        self.search_timeout_id = GLib.timeout_add(300, self._start_search, query)
+
+    def _on_search_stopped(self, search_entry):
+        """Handles search stop (Escape in search entry)"""
+        self._exit_search_mode()
+
+    def _start_search(self, query):
+        """Starts the actual search in a background thread"""
+        self.search_timeout_id = None
+
+        # Cancel any running search
+        if self.search_thread and self.search_thread.is_alive():
+            self.search_engine.cancel()
+            self.search_thread.join(timeout=0.5)
+
+        # Enter search mode
+        self.search_mode = True
+        self.content_stack.set_visible_child_name("search")
+        self.search_results_view.start_search()
+
+        # Start new search thread
+        self.search_thread = threading.Thread(
+            target=self._search_thread_func,
+            args=(self.current_path, query),
+            daemon=True
+        )
+        self.search_thread.start()
+
+        return False  # Don't repeat timeout
+
+    def _search_thread_func(self, root_path, query):
+        """Search function running in background thread"""
+        try:
+            for result in self.search_engine.search(root_path, query):
+                if self.search_engine.cancelled:
+                    break
+                # Add result to UI via main thread
+                GLib.idle_add(self.search_results_view.add_result, result)
+        finally:
+            # Signal search complete
+            GLib.idle_add(self.search_results_view.stop_search)
+
+    def _exit_search_mode(self):
+        """Exits search mode and returns to columns view"""
+        # Cancel any running search
+        if self.search_thread and self.search_thread.is_alive():
+            self.search_engine.cancel()
+
+        self.search_mode = False
+        self.content_stack.set_visible_child_name("columns")
+        self.search_entry.set_text("")
+        self.search_results_view.clear()
+
+    def _on_search_result_activated(self, result: SearchResult):
+        """Handles activation of a search result"""
+        # Navigate to the file's parent directory
+        if result.is_dir:
+            target_path = result.path
+        else:
+            target_path = result.path.parent
+
+        # Exit search mode and navigate
+        self._exit_search_mode()
+        self._navigate_to(target_path)
+
+        # If it's a file, open it
+        if not result.is_dir:
+            try:
+                subprocess.Popen(['xdg-open', str(result.path)])
+            except Exception as e:
+                print(f"Error opening file: {e}")
+
     def _on_key_press(self, widget, event):
         """Handles keyboard shortcuts"""
+        # Ctrl+F: Focus search entry
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
+            if event.keyval == Gdk.KEY_f:
+                self.search_entry.grab_focus()
+                return True
+
+        # Escape: Exit search mode or close window
         if event.keyval == Gdk.KEY_Escape:
-            self.close()
-            return True
-        elif event.keyval == Gdk.KEY_BackSpace:
-            self._on_go_back(None)
-            return True
+            if self.search_mode:
+                self._exit_search_mode()
+                return True
+            else:
+                self.close()
+                return True
+
+        # Backspace: Go back (only if not in search entry)
+        if event.keyval == Gdk.KEY_BackSpace:
+            # Don't intercept if focus is on search entry
+            if not self.search_entry.has_focus():
+                self._on_go_back(None)
+                return True
+
         return False
 
 

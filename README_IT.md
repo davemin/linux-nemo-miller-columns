@@ -11,12 +11,13 @@ Un'estensione per Nemo (file manager di Linux Mint/Cinnamon) che permette di vis
 - **Vista Miller Columns**: Naviga le cartelle in colonne affiancate
 - **Colonne ridimensionabili**: Trascina i separatori per regolare la larghezza delle colonne
 - **Distribuzione equa**: Le colonne si distribuiscono automaticamente in modo equo (es. 4 colonne = 25% ciascuna)
+- **Ricerca file**: Cerca per nome file E contenuto, ricorsivamente nelle sottocartelle
 - **Pannello di anteprima**: Mostra informazioni e anteprima del file selezionato
 - **Integrazione con Nemo**: Click destro → "Apri in Miller Columns"
 - **Navigazione rapida**: Barra del percorso cliccabile, pulsanti home e indietro
 - **Anteprima immagini**: Visualizza miniature delle immagini
 - **Apri in terminale**: Pulsante per aprire un terminale nella cartella corrente
-- **Scorciatoie da tastiera**: Backspace per tornare indietro, Esc per chiudere
+- **Scorciatoie da tastiera**: Ctrl+F per cercare, Backspace per tornare indietro, Esc per chiudere
 
 ## Requisiti
 
@@ -97,10 +98,21 @@ python3 ~/.local/share/nemo-miller-columns/nemo_miller_columns.py /home/utente/D
 
 | Tasto | Azione |
 |-------|--------|
+| `Ctrl+F` | Focus sulla barra di ricerca |
+| `Esc` | Esci dalla ricerca / Chiudi applicazione |
 | `Backspace` | Vai alla cartella padre |
-| `Esc` | Chiudi l'applicazione |
 | `Enter` / Doppio click su file | Apri con applicazione predefinita |
 | `Enter` / Click su cartella | Naviga nella cartella |
+
+## Ricerca
+
+La barra di ricerca permette di trovare file per nome o contenuto:
+
+- **Ricerca live**: I risultati appaiono mentre digiti (con debounce di 300ms)
+- **Ricorsiva**: Cerca in tutte le sottocartelle dalla posizione corrente
+- **Ricerca contenuto**: Cerca anche dentro i file di testo (salta file > 10MB)
+- **Indicatore match**: Mostra badge "in content" per i match nel contenuto
+- Clicca su un risultato per navigare e aprire il file
 
 ## Ridimensionamento Colonne
 
