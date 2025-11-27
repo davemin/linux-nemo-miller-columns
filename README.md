@@ -11,12 +11,13 @@ A Nemo extension (Linux Mint/Cinnamon file manager) that provides a **Miller Col
 - **Miller Columns View**: Navigate folders in side-by-side columns
 - **Resizable Columns**: Drag separators to adjust column widths
 - **Equal Distribution**: Columns automatically share available space equally (e.g., 4 columns = 25% each)
+- **File Search**: Search by file name AND file content recursively in subdirectories
 - **Preview Panel**: Shows file information and image previews
 - **Nemo Integration**: Right-click menu option "Open in Miller Columns"
 - **Quick Navigation**: Clickable path bar, home and back buttons
 - **Image Preview**: Displays thumbnails for image files
 - **Open in Terminal**: Button to open a terminal in the current folder
-- **Keyboard Shortcuts**: Backspace to go back, Esc to close
+- **Keyboard Shortcuts**: Ctrl+F for search, Backspace to go back, Esc to close
 
 ## Requirements
 
@@ -97,10 +98,21 @@ python3 ~/.local/share/nemo-miller-columns/nemo_miller_columns.py /home/user/Doc
 
 | Key | Action |
 |-----|--------|
+| `Ctrl+F` | Focus search bar |
+| `Esc` | Exit search mode / Close application |
 | `Backspace` | Go to parent folder |
-| `Esc` | Close the application |
 | `Enter` / Double-click on file | Open with default application |
 | `Enter` / Click on folder | Navigate into folder |
+
+## Search
+
+The search bar allows you to find files by name or content:
+
+- **Live search**: Results appear as you type (with 300ms debounce)
+- **Recursive**: Searches all subdirectories from current location
+- **Content search**: Also searches inside text files (skips files > 10MB)
+- **Match indicator**: Shows "in content" badge for content matches
+- Click on a result to navigate to it and open the file
 
 ## Column Resizing
 
