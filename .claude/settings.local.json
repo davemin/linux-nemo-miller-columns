@@ -3,7 +3,8 @@
     "allow": [
       "Bash(chmod:*)",
       "Bash(python3:*)",
-      "Bash(timeout 3 python3:*)"
+      "Bash(timeout 3 python3:*)",
+      "Bash(./install.sh:*)"
     ],
     "deny": [],
     "ask": []
