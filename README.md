@@ -2,7 +2,7 @@
 
 A Nemo extension (Linux Mint/Cinnamon file manager) that provides a **Miller Columns** view, similar to macOS Finder.
 
-![Miller Columns](https://en.wikipedia.org/wiki/Miller_columns)
+[Miller Columns](https://en.wikipedia.org/wiki/Miller_columns)
 
 *[Leggi in Italiano](README_IT.md)*
 
